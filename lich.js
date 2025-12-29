@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name        Lichess Funnies v35.2 (Dynamic Panic + 7.5s Blunder Mode + SPA-safe) andraw clean
-// @version     36.2
-// @description Chess for disabled people experimental all features of automove through websockets and stockfish is temp will be retracted after prelims tests (Instant Move + Arrow Toggle + MultiPV Attacking Hints w/ Legends; auto-refresh arrows on your turn)
+// @name        Lichess Funnies v36.3 (Variant Support + Dynamic Panic + 7.5s Blunder Mode + SPA-safe) andraw clean
+// @version     36.3
+// @description Chess for disabled people experimental all features of automove through websockets and stockfish with variant support (Standard, Crazyhouse, Atomic, Antichess, King of the Hill, Three-check, Racing Kings, Horde) - temp will be retracted after prelims tests (Instant Move + Arrow Toggle + MultiPV Attacking Hints w/ Legends; auto-refresh arrows on your turn)
 // @author      Michael and Ian (modified with Config Toggles)
 // @match       https://lichess.org/*
 // @icon        https://www.google.com/s2/favicons?sz=64&domain=lichess.org
