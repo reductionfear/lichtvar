@@ -362,7 +362,12 @@ function countPieces() {
   const fen = getFen();
   if (fen === cachedFen && cachedPieceCount !== null) return cachedPieceCount;
   cachedFen = fen;
-  cachedPieceCount = fen ? (fen.split(' ')[0].match(/[pnbrqkPNBRQK]/g) || []).length : 32;
+  if (!fen) {
+    // Default piece count based on variant
+    cachedPieceCount = currentVariant === 'horde' ? 48 : 32;
+    return cachedPieceCount;
+  }
+  cachedPieceCount = (fen.split(' ')[0].match(/[pnbrqkPNBRQK]/g) || []).length;
   return cachedPieceCount;
 }
 
@@ -377,14 +382,11 @@ function checkDrawishMoves(pvs) {
 
       const uci = pvs[i].firstMove;
 
-      // Clone the position
-      const tempPos = position.clone();
-      
-      // Parse and play the move
+      // Parse and play the move (positions are immutable, play returns new position)
       const move = chessops.parseUci(uci);
       if (!move) continue;
       
-      const newPos = tempPos.play(move);
+      const newPos = position.play(move);
 
       // Check for draw conditions
       const isDrawish = newPos.isStalemate() || newPos.isInsufficientMaterial();
@@ -416,13 +418,12 @@ function selectVariedMove(pvs) {
 
       const uci = pvs[i].firstMove;
 
-      // Clone position and try move
-      const tempPos = position.clone();
+      // Parse move and try playing it (positions are immutable)
       const move = chessops.parseUci(uci);
       
       // If move is valid (legal), check for draw
       if (move) {
-        const newPos = tempPos.play(move);
+        const newPos = position.play(move);
         const isDraw = newPos.isStalemate() || newPos.isInsufficientMaterial();
 
         if (isDraw) {
