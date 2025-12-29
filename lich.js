@@ -594,29 +594,42 @@ function resetStats() {
 const SF_THREADS = 4;
 const sfListeners = new Set();
 let stockfish = null;
+let engineInitPromise = null;
 
 async function initEngine() {
-  if (stockfish) return; // Already initialized
+  // Prevent race condition by reusing existing initialization promise
+  if (engineInitPromise) return engineInitPromise;
+  if (stockfish) return Promise.resolve(); // Already initialized
   
-  console.log('[Engine] Initializing Stockfish...');
-  
-  // Call the Stockfish factory function to create an instance
-  stockfish = await Stockfish();
-  
-  // Use addMessageListener instead of onmessage
-  stockfish.addMessageListener((data) => {
-    const msg = String(data || '');
-    if (msg === 'readyok') {
-      engineReady = true;
-      console.log('[Engine] ✅ Ready!');
+  engineInitPromise = (async () => {
+    try {
+      console.log('[Engine] Initializing Stockfish...');
+      
+      // Call the Stockfish factory function to create an instance
+      stockfish = await Stockfish();
+      
+      // Use addMessageListener instead of onmessage
+      stockfish.addMessageListener((data) => {
+        const msg = String(data || '');
+        if (msg === 'readyok') {
+          engineReady = true;
+          console.log('[Engine] ✅ Ready!');
+        }
+        // Call existing listeners with data wrapped in event-like object for compatibility
+        for (const fn of sfListeners) {
+          try { fn({ data: msg }); } catch(x) {}
+        }
+      });
+      
+      console.log('[Engine] Stockfish instance created');
+    } catch (error) {
+      console.error('[Engine] ❌ Failed to initialize Stockfish:', error);
+      engineInitPromise = null; // Reset to allow retry
+      throw error;
     }
-    // Call existing listeners with data wrapped in event-like object for compatibility
-    for (const fn of sfListeners) {
-      try { fn({ data: msg }); } catch(x) {}
-    }
-  });
+  })();
   
-  console.log('[Engine] Stockfish instance created');
+  return engineInitPromise;
 }
 
 async function configureEngine() {
