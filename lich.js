@@ -13,7 +13,7 @@
 // @require     https://raw.githubusercontent.com/redwhitedaffodil/licht-squirrels/main/chessops-bundle.js
 // @require     https://raw.githubusercontent.com/Psyyke/A.C.A.S/main/app/assets/engines/fairy-stockfish-nnue.wasm/stockfish.js
 // ==/UserScript==
-/* globals jQuery, $, chessops, stockfish, lichess */
+/* globals jQuery, $, chessops, lichess */
 
 // NOTE: Lichess is a single-page app (SPA). Games often start without a full page reload,
 // so we must NOT exit early on the homepage. We simply wait for game DOM nodes to appear.
@@ -593,19 +593,49 @@ function resetStats() {
 // --- Stockfish ---
 const SF_THREADS = 4;
 const sfListeners = new Set();
+let stockfish = null;
+let engineInitPromise = null;
 
-stockfish.onmessage = (e) => {
-  const data = String(e.data || '');
-  if (data === 'readyok') {
-    engineReady = true;
-    console.log('[Engine] ✅ Ready!');
-  }
-  for (const fn of sfListeners) {
-    try { fn(e); } catch(x) {}
-  }
-};
+async function initEngine() {
+  // Prevent race condition by reusing existing initialization promise
+  if (engineInitPromise) return engineInitPromise;
+  if (stockfish) return Promise.resolve(); // Already initialized
+  
+  engineInitPromise = (async () => {
+    try {
+      console.log('[Engine] Initializing Stockfish...');
+      
+      // Call the Stockfish factory function to create an instance
+      stockfish = await Stockfish();
+      
+      // Use addMessageListener instead of onmessage
+      stockfish.addMessageListener((data) => {
+        const msg = String(data || '');
+        if (msg === 'readyok') {
+          engineReady = true;
+          console.log('[Engine] ✅ Ready!');
+        }
+        // Call existing listeners with data wrapped in event-like object for compatibility
+        for (const fn of sfListeners) {
+          try { fn({ data: msg }); } catch(x) {}
+        }
+      });
+      
+      console.log('[Engine] Stockfish instance created');
+    } catch (error) {
+      console.error('[Engine] ❌ Failed to initialize Stockfish:', error);
+      engineInitPromise = null; // Reset to allow retry
+      throw error;
+    }
+  })();
+  
+  return engineInitPromise;
+}
 
-function configureEngine() {
+async function configureEngine() {
+  // Initialize engine first if not already done
+  await initEngine();
+  
   return new Promise((resolve) => {
     console.log('[Engine] Configuring...');
     const variant = detectVariant();
