@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name        Lichess Funnies v35.2 (Dynamic Panic + 7.5s Blunder Mode + SPA-safe) andraw clean
-// @version     36.2
-// @description Chess for disabled people experimental all features of automove through websockets and stockfish is temp will be retracted after prelims tests (Instant Move + Arrow Toggle + MultiPV Attacking Hints w/ Legends; auto-refresh arrows on your turn)
+// @name        Lichess Funnies v36.3 (Variant Support + Dynamic Panic + 7.5s Blunder Mode + SPA-safe) andraw clean
+// @version     36.3
+// @description Chess for disabled people experimental all features of automove through websockets and stockfish with variant support (Standard, Crazyhouse, Atomic, Antichess, King of the Hill, Three-check, Racing Kings, Horde) - temp will be retracted after prelims tests (Instant Move + Arrow Toggle + MultiPV Attacking Hints w/ Legends; auto-refresh arrows on your turn)
 // @author      Michael and Ian (modified with Config Toggles)
 // @match       https://lichess.org/*
 // @icon        https://www.google.com/s2/favicons?sz=64&domain=lichess.org
@@ -10,10 +10,10 @@
 // @updateURL   https://github.com/mchappychen/lichess-funnies/blob/main/lichess.user.js
 // @downloadURL https://github.com/mchappychen/lichess-funnies/blob/main/lichess.user.js
 // @require     https://code.jquery.com/jquery-3.6.0.min.js
-// @require     https://raw.githubusercontent.com/mchappychen/lichess-funnies/main/chess.js
-// @require     https://raw.githubusercontent.com/mchappychen/lichess-funnies/main/stockfish.js
+// @require     https://raw.githubusercontent.com/redwhitedaffodil/licht-squirrels/main/chessops-bundle.js
+// @require     https://raw.githubusercontent.com/Psyyke/A.C.A.S/main/app/assets/engines/fairy-stockfish-nnue.wasm/stockfish.js
 // ==/UserScript==
-/* globals jQuery, $, Chess, stockfish, lichess, game */
+/* globals jQuery, $, chessops, stockfish, lichess */
 
 // NOTE: Lichess is a single-page app (SPA). Games often start without a full page reload,
 // so we must NOT exit early on the homepage. We simply wait for game DOM nodes to appear.
@@ -39,7 +39,135 @@ const webSocketProxy = new Proxy(window.WebSocket, {
 window.WebSocket = webSocketProxy;
 
 window.lichess = window.site;
-window.game = new Chess();
+
+// --- Global state for variant support ---
+let currentVariant = 'chess';
+let position = null;  // chessops Position object
+
+// --- Helper functions for variant detection and position management ---
+function detectVariant() {
+  const link = document.querySelector('a.variant-link');
+  if (!link) return 'chess';
+  
+  const href = link.getAttribute('href') || '';
+  if (href.includes('crazyhouse')) return 'crazyhouse';
+  if (href.includes('atomic')) return 'atomic';
+  if (href.includes('antichess')) return 'antichess';
+  if (href.includes('kingOfTheHill')) return 'kingofthehill';
+  if (href.includes('threeCheck')) return '3check';
+  if (href.includes('racingKings')) return 'racingkings';
+  if (href.includes('horde')) return 'horde';
+  return 'chess';
+}
+
+function createPosition(variant, fen = null) {
+  const { Chess, variant: v, fen: fenModule } = chessops;
+  const { Crazyhouse, Atomic, Antichess, KingOfTheHill, 
+          ThreeCheck, RacingKings, Horde, setupPosition } = v;
+  const { parseFen } = fenModule;
+  
+  if (!fen) {
+    switch (variant) {
+      case 'crazyhouse': return Crazyhouse.default();
+      case 'atomic': return Atomic.default();
+      case 'antichess': return Antichess.default();
+      case 'kingofthehill': return KingOfTheHill.default();
+      case '3check': return ThreeCheck.default();
+      case 'racingkings': return RacingKings.default();
+      case 'horde': return Horde.default();
+      default: return Chess.default();
+    }
+  }
+  
+  const setup = parseFen(fen);
+  if (setup.isErr) return null;
+  
+  // Map variant name to rules
+  let rules = variant;
+  const pos = setupPosition(rules, setup.value);
+  if (pos.isErr) return null;
+  
+  return pos.value;
+}
+
+// Helper to get FEN from current position
+function getFen() {
+  if (!position) return null;
+  return chessops.fen.makeFen(position.toSetup());
+}
+
+// Helper to get turn
+function getTurn() {
+  if (!position) return 'w';
+  return position.turn === 'white' ? 'w' : 'b';
+}
+
+// Helper to play a move in UCI notation
+function playMove(uci) {
+  if (!position) return false;
+  const move = chessops.parseUci(uci);
+  if (!move) return false;
+  position = position.play(move);
+  return true;
+}
+
+// Helper to play a move in SAN notation
+function playMoveSan(san) {
+  if (!position) return false;
+  const move = chessops.san.parseSan(position, san);
+  if (!move) return false;
+  position = position.play(move);
+  return true;
+}
+
+// Compatibility wrapper: emulate Chess.js game object
+const game = {
+  fen: () => getFen(),
+  turn: () => getTurn(),
+  move: (moveOrConfig) => {
+    if (typeof moveOrConfig === 'string') {
+      // SAN move
+      return playMoveSan(moveOrConfig);
+    } else if (moveOrConfig && moveOrConfig.from && moveOrConfig.to) {
+      // UCI-style config
+      const uci = moveOrConfig.from + moveOrConfig.to + (moveOrConfig.promotion || '');
+      return playMove(uci);
+    }
+    return false;
+  },
+  get: (square) => {
+    if (!position) return null;
+    const sq = chessops.parseSquare(square);
+    if (sq === undefined) return null;
+    const piece = position.board.get(sq);
+    if (!piece) return null;
+    return {
+      type: piece.role,
+      color: piece.color === 'white' ? 'w' : 'b'
+    };
+  },
+  pgn: () => {
+    // For now, return empty PGN as we don't track full history
+    // This is used for draw detection which we'll handle differently
+    return '';
+  },
+  load_pgn: () => {
+    // Not needed with chessops approach
+    return true;
+  },
+  undo: () => {
+    // Not implemented - we don't need undo with our approach
+    return null;
+  },
+  in_threefold_repetition: () => {
+    // We'll handle draw detection differently
+    return false;
+  },
+  in_draw: () => {
+    if (!position) return false;
+    return position.isStalemate() || position.isInsufficientMaterial();
+  }
+};
 
 // --- Settings State ---
 var autoRun = localStorage.getItem('autorun') ?? "0";
@@ -231,9 +359,14 @@ function coordsToSquare(x, y, board) {
 }
 
 function countPieces() {
-  const fen = game.fen();
+  const fen = getFen();
   if (fen === cachedFen && cachedPieceCount !== null) return cachedPieceCount;
   cachedFen = fen;
+  if (!fen) {
+    // Default piece count based on variant
+    cachedPieceCount = currentVariant === 'horde' ? 48 : 32;
+    return cachedPieceCount;
+  }
   cachedPieceCount = (fen.split(' ')[0].match(/[pnbrqkPNBRQK]/g) || []).length;
   return cachedPieceCount;
 }
@@ -244,29 +377,19 @@ function checkDrawishMoves(pvs) {
   const drawishMoves = [];
 
   try {
-    const tempGame = new Chess();
-    // 1. Load history once
-    tempGame.load_pgn(game.pgn());
-
     for (let i = 0; i < pvs.length && i < 4; i++) {
       if (!pvs[i]?.firstMove) continue;
 
       const uci = pvs[i].firstMove;
 
-      // 2. Simplified Config: Always request Queen promotion.
-      // chess.js will only use this if the move actually allows promotion.
-      const moveConfig = {
-        from: uci.substring(0, 2),
-        to: uci.substring(2, 4),
-        promotion: 'q'
-      };
+      // Parse and play the move (positions are immutable, play returns new position)
+      const move = chessops.parseUci(uci);
+      if (!move) continue;
+      
+      const newPos = position.play(move);
 
-      const moveResult = tempGame.move(moveConfig);
-
-      if (!moveResult) continue;
-
-      // 3. Check status
-      const isDrawish = tempGame.in_threefold_repetition() || tempGame.in_draw();
+      // Check for draw conditions
+      const isDrawish = newPos.isStalemate() || newPos.isInsufficientMaterial();
 
       if (isDrawish) {
         console.log(`[Anti-Draw] 🚫 ${uci} leads to draw`);
@@ -274,9 +397,6 @@ function checkDrawishMoves(pvs) {
       } else {
         validMoves.push({ ...pvs[i], idx: i });
       }
-
-      // 4. Undo
-      tempGame.undo();
     }
   } catch (e) {
     console.error("[Anti-Draw] Error:", e);
@@ -290,31 +410,21 @@ function selectVariedMove(pvs) {
   if (!pvs || pvs.length === 0) return null;
 
   const valid = [];
-  const pgn = game.pgn(); // Fetch PGN once
 
   // --- OPTIMIZED DRAW CHECK ---
   try {
-    const tempGame = new Chess();
-    tempGame.load_pgn(pgn); // 1. Restore full history for 3-fold detection
-
     for (let i = 0; i < pvs.length && i < 4; i++) {
       if (!pvs[i]?.firstMove) continue;
 
       const uci = pvs[i].firstMove;
 
-      // 2. Try move with "Always Queen" promotion
-      const moveResult = tempGame.move({
-        from: uci.substring(0, 2),
-        to: uci.substring(2, 4),
-        promotion: 'q' // STRICTLY ENFORCE QUEEN
-      });
-
+      // Parse move and try playing it (positions are immutable)
+      const move = chessops.parseUci(uci);
+      
       // If move is valid (legal), check for draw
-      if (moveResult) {
-        const isDraw = tempGame.in_threefold_repetition() || tempGame.in_draw();
-
-        // 3. Undo immediately to reset for next loop iteration
-        tempGame.undo();
+      if (move) {
+        const newPos = position.play(move);
+        const isDraw = newPos.isStalemate() || newPos.isInsufficientMaterial();
 
         if (isDraw) {
           console.log(`[Anti-Draw] 🚫 Skipping ${uci} (leads to draw/repetition)`);
@@ -416,8 +526,8 @@ function calculateHumanDelay(uci) {
     return 0;
   }
 
-  // CAPTURES - always instant
-  if (uci && uci.length >= 4) {
+  // CAPTURES - always instant (but not drops)
+  if (uci && uci.length >= 4 && !uci.includes('@')) {
     const targetSquare = uci.substring(2, 4);
     const targetPiece = game.get(targetSquare);
     if (targetPiece) {
@@ -498,11 +608,15 @@ stockfish.onmessage = (e) => {
 function configureEngine() {
   return new Promise((resolve) => {
     console.log('[Engine] Configuring...');
+    const variant = detectVariant();
+    currentVariant = variant;
     stockfish.postMessage('uci');
+    stockfish.postMessage(`setoption name UCI_Variant value ${variant}`);
     stockfish.postMessage('setoption name Threads value 1');
     stockfish.postMessage('setoption name Contempt value 20');
     stockfish.postMessage(`setoption name MultiPV value ${SF_THREADS}`);
     stockfish.postMessage('isready');
+    console.log(`[Engine] Configured for variant: ${variant}`);
 
     const checkReady = setInterval(() => {
       if (engineReady) {
@@ -649,21 +763,43 @@ function drawArrows(pvs) {
     seen.add(m);
 
     const pal = PV_COLORS[i];
-    const [x1, y1] = getArrowCoords(m.substring(0, 2), col);
-    const [x2, y2] = getArrowCoords(m.substring(2, 4), col);
+    
+    // Handle drop moves (e.g., N@e4)
+    if (m.includes('@')) {
+      // For drops, just show a marker on the target square
+      const targetSq = m.split('@')[1];
+      const [x2, y2] = getArrowCoords(targetSq, col);
+      // Draw a circle instead of arrow for drops
+      layer.innerHTML += `<circle cx="${x2}" cy="${y2}" r="0.4" fill="${pal.hex}" opacity="${0.7 - i*0.1}" stroke="#FFF" stroke-width="0.05"></circle>`;
+      
+      const cp = pv.evalCp || 0;
+      const cpLoss = topEval - cp;
+      let label = pv.evalType === 'mate'
+        ? `${pv.mateVal > 0 ? '+' : ''}M${pv.mateVal}`
+        : `${cp >= 0 ? '+' : ''}${(cp/100).toFixed(1)}`;
+      if (i > 0 && cpLoss > 0) label += ` (-${(cpLoss/100).toFixed(1)})`;
 
-    layer.innerHTML += `<line stroke="${pal.hex}" stroke-width="${0.22 - i*0.015}" stroke-linecap="round" marker-end="url(#arrowhead-${pal.name})" opacity="${1 - i*0.1}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+      const w = label.length * 0.13 + 0.5;
+      layer.innerHTML += `<rect x="${x2 - w/2}" y="${y2 - 0.8}" width="${w}" height="0.34" rx="0.06" fill="#FFF" opacity="0.9" stroke="${pal.hex}" stroke-width="0.02"></rect>`;
+      layer.innerHTML += `<text x="${x2}" y="${y2 - 0.58}" fill="${pal.hex}" text-anchor="middle" font-size="0.24" font-weight="bold">${label}</text>`;
+    } else {
+      // Normal moves
+      const [x1, y1] = getArrowCoords(m.substring(0, 2), col);
+      const [x2, y2] = getArrowCoords(m.substring(2, 4), col);
 
-    const cp = pv.evalCp || 0;
-    const cpLoss = topEval - cp;
-    let label = pv.evalType === 'mate'
-      ? `${pv.mateVal > 0 ? '+' : ''}M${pv.mateVal}`
-      : `${cp >= 0 ? '+' : ''}${(cp/100).toFixed(1)}`;
-    if (i > 0 && cpLoss > 0) label += ` (-${(cpLoss/100).toFixed(1)})`;
+      layer.innerHTML += `<line stroke="${pal.hex}" stroke-width="${0.22 - i*0.015}" stroke-linecap="round" marker-end="url(#arrowhead-${pal.name})" opacity="${1 - i*0.1}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
 
-    const w = label.length * 0.13 + 0.5;
-    layer.innerHTML += `<rect x="${x2 - w/2}" y="${y2 - 0.4}" width="${w}" height="0.34" rx="0.06" fill="#FFF" opacity="0.9" stroke="${pal.hex}" stroke-width="0.02"></rect>`;
-    layer.innerHTML += `<text x="${x2}" y="${y2 - 0.18}" fill="${pal.hex}" text-anchor="middle" font-size="0.24" font-weight="bold">${label}</text>`;
+      const cp = pv.evalCp || 0;
+      const cpLoss = topEval - cp;
+      let label = pv.evalType === 'mate'
+        ? `${pv.mateVal > 0 ? '+' : ''}M${pv.mateVal}`
+        : `${cp >= 0 ? '+' : ''}${(cp/100).toFixed(1)}`;
+      if (i > 0 && cpLoss > 0) label += ` (-${(cpLoss/100).toFixed(1)})`;
+
+      const w = label.length * 0.13 + 0.5;
+      layer.innerHTML += `<rect x="${x2 - w/2}" y="${y2 - 0.4}" width="${w}" height="0.34" rx="0.06" fill="#FFF" opacity="0.9" stroke="${pal.hex}" stroke-width="0.02"></rect>`;
+      layer.innerHTML += `<text x="${x2}" y="${y2 - 0.18}" fill="${pal.hex}" text-anchor="middle" font-size="0.24" font-weight="bold">${label}</text>`;
+    }
   });
 }
 
@@ -679,7 +815,7 @@ function executeMove(uci) {
   if (!cgWrap) return false;
 
   const myCol = cgWrap.classList.contains('orientation-white') ? 'w' : 'b';
-  if (game.turn() !== myCol) return false;
+  if (getTurn() !== myCol) return false;
 
   const now = Date.now();
   const clockSecs = getClockSeconds();
@@ -713,8 +849,8 @@ function executeMoveHumanized(uci, engineMs = 0) {
     return;
   }
 
-  // Instant capture
-  if (uci.length >= 4) {
+  // Instant capture - check if target square has a piece
+  if (uci.length >= 4 && !uci.includes('@')) {
     const targetSquare = uci.substring(2, 4);
     const targetPiece = game.get(targetSquare);
     if (targetPiece) {
@@ -756,17 +892,27 @@ function actOnHint(data, engineMs = 0) {
   const cgWrap = $('.cg-wrap')[0];
   if (cgWrap && showArrows) {
     const col = cgWrap.classList.contains('orientation-white') ? 'white' : 'black';
-    const [x1, y1] = getArrowCoords(uci.substring(0, 2), col);
-    const [x2, y2] = getArrowCoords(uci.substring(2, 4), col);
     const layer = $('svg.cg-shapes g')[0];
-    if (layer) layer.innerHTML += `<line stroke="${PV_COLORS[colorIdx].hex}" stroke-width="0.3" stroke-linecap="round" marker-end="url(#arrowhead-pv1)" opacity="1" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+    if (layer) {
+      if (uci.includes('@')) {
+        // Drop move - draw a circle
+        const targetSq = uci.split('@')[1];
+        const [x2, y2] = getArrowCoords(targetSq, col);
+        layer.innerHTML += `<circle cx="${x2}" cy="${y2}" r="0.4" fill="${PV_COLORS[colorIdx].hex}" opacity="0.8" stroke="#FFF" stroke-width="0.05"></circle>`;
+      } else {
+        // Normal move - draw arrow
+        const [x1, y1] = getArrowCoords(uci.substring(0, 2), col);
+        const [x2, y2] = getArrowCoords(uci.substring(2, 4), col);
+        layer.innerHTML += `<line stroke="${PV_COLORS[colorIdx].hex}" stroke-width="0.3" stroke-linecap="round" marker-end="url(#arrowhead-pv1)" opacity="1" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+      }
+    }
   }
 
   if (!autoHint) { isProcessing = false; return; }
   if (!webSocketWrapper || !cgWrap) { isProcessing = false; return; }
 
   const myCol = cgWrap.classList.contains('orientation-white') ? 'w' : 'b';
-  if (game.turn() !== myCol) { isProcessing = false; return; }
+  if (getTurn() !== myCol) { isProcessing = false; return; }
 
   if (humanMode) executeMoveHumanized(uci, engineMs);
   else executeMove(uci);
@@ -779,7 +925,7 @@ async function processTurn() {
   if (!cgWrap) return;
 
   const myCol = cgWrap.classList.contains('orientation-white') ? 'w' : 'b';
-  if (game.turn() !== myCol) return;
+  if (getTurn() !== myCol) return;
 
   if (!autoHint) return;
 
@@ -790,7 +936,7 @@ async function processTurn() {
   panicThreshold = 1.0 + Math.random() * 0.7;
 
   const clockSecs = getClockSeconds();
-  const currentFen = game.fen();
+  const currentFen = getFen();
   const t0 = performance.now();
 
   try {
@@ -835,13 +981,25 @@ async function processTurn() {
 // --- Sync game state ---
 function syncGameState() {
   try {
-    game = new Chess();
+    // Detect variant and create initial position
+    currentVariant = detectVariant();
+    position = createPosition(currentVariant);
+    
+    // Apply all moves from the DOM
     const moves = $('kwdb, u8t');
     for (let i = 0; i < moves.length; i++) {
       const moveText = moves[i].textContent.replace('✓', '').trim();
-      if (moveText) try { game.move(moveText); } catch(e) {}
+      if (moveText) {
+        try { 
+          playMoveSan(moveText);
+        } catch(e) {
+          console.warn(`Failed to play move: ${moveText}`, e);
+        }
+      }
     }
-  } catch(e) {}
+  } catch(e) {
+    console.error('syncGameState error:', e);
+  }
 }
 
 // --- Piece Select Mode ---
@@ -854,11 +1012,11 @@ function setupPieceSelectMode() {
     const sq = coordsToSquare(e.clientX, e.clientY, board);
     if (!sq) return;
     const myCol = board.classList.contains('orientation-white') ? 'w' : 'b';
-    if (game.turn() !== myCol) return;
+    if (getTurn() !== myCol) return;
     const piece = game.get(sq);
     if (!piece || piece.color !== myCol) return;
 
-    if (!cachedPVs) cachedPVs = await getMultiPV(game.fen());
+    if (!cachedPVs) cachedPVs = await getMultiPV(getFen());
     const moves = cachedPVs.filter(p => p.firstMove?.substring(0, 2) === sq);
     if (moves.length > 0) {
       const best = moves[0].firstMove;
@@ -936,19 +1094,21 @@ async function run() {
   const cgWrap = $('.cg-wrap')[0];
   if (cgWrap) {
     const myCol = cgWrap.classList.contains('orientation-white') ? 'w' : 'b';
-    if (game.turn() === myCol && autoHint) setTimeout(processTurn, 500);
+    if (getTurn() === myCol && autoHint) setTimeout(processTurn, 500);
   }
 
   // In the MutationObserver callback (around line 470), add lastMoveSent reset:
   const moveObs = new MutationObserver((muts) => {
     for (const mut of muts) {
-      if (mut.addedNodes. length === 0) continue;
+      if (mut.addedNodes.length === 0) continue;
       if (mut.addedNodes[0].tagName === "I5Z") continue;
 
-      const lastEl = $('l4x')[0]?. lastChild;
-      if (! lastEl) continue;
+      const lastEl = $('l4x')[0]?.lastChild;
+      if (!lastEl) continue;
 
-      try { game.move(lastEl.textContent); } catch (e) {}
+      try { playMoveSan(lastEl.textContent); } catch (e) {
+        console.warn('Failed to play move:', e);
+      }
 
       // CLEAR ALL CACHES - position changed
       cachedPVs = null;
@@ -987,7 +1147,7 @@ async function run() {
       const cg = $('.cg-wrap')[0];
       if (cg) {
         const myCol = cg.classList.contains('orientation-white') ? 'w' : 'b';
-        if (game.turn() === myCol) processTurn();
+        if (getTurn() === myCol) processTurn();
       }
     }
   }, 3000);
@@ -1000,7 +1160,7 @@ async function run() {
   hintBtn.innerText = 'Hint';
   hintBtn.classList.add('fbt');
   hintBtn.onclick = () => {
-    getMultiPV(game.fen()).then(pvs => { if (pvs.length) { cachedPVs = pvs; drawArrows(pvs); } });
+    getMultiPV(getFen()).then(pvs => { if (pvs.length) { cachedPVs = pvs; drawArrows(pvs); } });
   };
   if (btnCont) btnCont.appendChild(hintBtn);
 
