@@ -82,7 +82,9 @@ function createPosition(variant, fen = null) {
   const setup = parseFen(fen);
   if (setup.isErr) return null;
   
-  const pos = setupPosition(variant, setup.value);
+  // Map variant name to rules
+  let rules = variant;
+  const pos = setupPosition(rules, setup.value);
   if (pos.isErr) return null;
   
   return pos.value;
@@ -760,21 +762,43 @@ function drawArrows(pvs) {
     seen.add(m);
 
     const pal = PV_COLORS[i];
-    const [x1, y1] = getArrowCoords(m.substring(0, 2), col);
-    const [x2, y2] = getArrowCoords(m.substring(2, 4), col);
+    
+    // Handle drop moves (e.g., N@e4)
+    if (m.includes('@')) {
+      // For drops, just show a marker on the target square
+      const targetSq = m.split('@')[1];
+      const [x2, y2] = getArrowCoords(targetSq, col);
+      // Draw a circle instead of arrow for drops
+      layer.innerHTML += `<circle cx="${x2}" cy="${y2}" r="0.4" fill="${pal.hex}" opacity="${0.7 - i*0.1}" stroke="#FFF" stroke-width="0.05"></circle>`;
+      
+      const cp = pv.evalCp || 0;
+      const cpLoss = topEval - cp;
+      let label = pv.evalType === 'mate'
+        ? `${pv.mateVal > 0 ? '+' : ''}M${pv.mateVal}`
+        : `${cp >= 0 ? '+' : ''}${(cp/100).toFixed(1)}`;
+      if (i > 0 && cpLoss > 0) label += ` (-${(cpLoss/100).toFixed(1)})`;
 
-    layer.innerHTML += `<line stroke="${pal.hex}" stroke-width="${0.22 - i*0.015}" stroke-linecap="round" marker-end="url(#arrowhead-${pal.name})" opacity="${1 - i*0.1}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+      const w = label.length * 0.13 + 0.5;
+      layer.innerHTML += `<rect x="${x2 - w/2}" y="${y2 - 0.8}" width="${w}" height="0.34" rx="0.06" fill="#FFF" opacity="0.9" stroke="${pal.hex}" stroke-width="0.02"></rect>`;
+      layer.innerHTML += `<text x="${x2}" y="${y2 - 0.58}" fill="${pal.hex}" text-anchor="middle" font-size="0.24" font-weight="bold">${label}</text>`;
+    } else {
+      // Normal moves
+      const [x1, y1] = getArrowCoords(m.substring(0, 2), col);
+      const [x2, y2] = getArrowCoords(m.substring(2, 4), col);
 
-    const cp = pv.evalCp || 0;
-    const cpLoss = topEval - cp;
-    let label = pv.evalType === 'mate'
-      ? `${pv.mateVal > 0 ? '+' : ''}M${pv.mateVal}`
-      : `${cp >= 0 ? '+' : ''}${(cp/100).toFixed(1)}`;
-    if (i > 0 && cpLoss > 0) label += ` (-${(cpLoss/100).toFixed(1)})`;
+      layer.innerHTML += `<line stroke="${pal.hex}" stroke-width="${0.22 - i*0.015}" stroke-linecap="round" marker-end="url(#arrowhead-${pal.name})" opacity="${1 - i*0.1}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
 
-    const w = label.length * 0.13 + 0.5;
-    layer.innerHTML += `<rect x="${x2 - w/2}" y="${y2 - 0.4}" width="${w}" height="0.34" rx="0.06" fill="#FFF" opacity="0.9" stroke="${pal.hex}" stroke-width="0.02"></rect>`;
-    layer.innerHTML += `<text x="${x2}" y="${y2 - 0.18}" fill="${pal.hex}" text-anchor="middle" font-size="0.24" font-weight="bold">${label}</text>`;
+      const cp = pv.evalCp || 0;
+      const cpLoss = topEval - cp;
+      let label = pv.evalType === 'mate'
+        ? `${pv.mateVal > 0 ? '+' : ''}M${pv.mateVal}`
+        : `${cp >= 0 ? '+' : ''}${(cp/100).toFixed(1)}`;
+      if (i > 0 && cpLoss > 0) label += ` (-${(cpLoss/100).toFixed(1)})`;
+
+      const w = label.length * 0.13 + 0.5;
+      layer.innerHTML += `<rect x="${x2 - w/2}" y="${y2 - 0.4}" width="${w}" height="0.34" rx="0.06" fill="#FFF" opacity="0.9" stroke="${pal.hex}" stroke-width="0.02"></rect>`;
+      layer.innerHTML += `<text x="${x2}" y="${y2 - 0.18}" fill="${pal.hex}" text-anchor="middle" font-size="0.24" font-weight="bold">${label}</text>`;
+    }
   });
 }
 
@@ -867,10 +891,20 @@ function actOnHint(data, engineMs = 0) {
   const cgWrap = $('.cg-wrap')[0];
   if (cgWrap && showArrows) {
     const col = cgWrap.classList.contains('orientation-white') ? 'white' : 'black';
-    const [x1, y1] = getArrowCoords(uci.substring(0, 2), col);
-    const [x2, y2] = getArrowCoords(uci.substring(2, 4), col);
     const layer = $('svg.cg-shapes g')[0];
-    if (layer) layer.innerHTML += `<line stroke="${PV_COLORS[colorIdx].hex}" stroke-width="0.3" stroke-linecap="round" marker-end="url(#arrowhead-pv1)" opacity="1" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+    if (layer) {
+      if (uci.includes('@')) {
+        // Drop move - draw a circle
+        const targetSq = uci.split('@')[1];
+        const [x2, y2] = getArrowCoords(targetSq, col);
+        layer.innerHTML += `<circle cx="${x2}" cy="${y2}" r="0.4" fill="${PV_COLORS[colorIdx].hex}" opacity="0.8" stroke="#FFF" stroke-width="0.05"></circle>`;
+      } else {
+        // Normal move - draw arrow
+        const [x1, y1] = getArrowCoords(uci.substring(0, 2), col);
+        const [x2, y2] = getArrowCoords(uci.substring(2, 4), col);
+        layer.innerHTML += `<line stroke="${PV_COLORS[colorIdx].hex}" stroke-width="0.3" stroke-linecap="round" marker-end="url(#arrowhead-pv1)" opacity="1" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+      }
+    }
   }
 
   if (!autoHint) { isProcessing = false; return; }
